@@ -2,10 +2,27 @@ import math
 import decimal
 
 arc_tolerance = (0.1)
-line_sampling = (0.017) #0.017 - 1 def
+line_sampling = (0.017) #0.017 - 1 deg
 
 def sgn (i):
     return (i>0)*2 - 1 if i != 0 else 0
+
+def normalize_angle(angle):
+    angle = round(angle,5)
+    if angle < 0:
+        while True:
+            angle = angle + 2*math.pi
+            if angle >= 0:
+                break
+        return angle
+    elif angle > 2*math.pi:
+        while True:
+            angle = angle - 2*math.pi
+            if angle <= 2*math.pi:
+                break
+        return angle
+    else:
+        return angle
 
 
 first_file =[]
@@ -78,14 +95,10 @@ for punkt in points:
     x = float(punkt[0])
     y = float(punkt[1])
     r = math.sqrt((x*x) + (y*y))
-    phi = math.acos(x/r)*sgn(y)
-    
-    if phi < 0:
-        phi = phi + (2*math.pi)
+    phi = normalize_angle(math.acos(x/r)*sgn(y))
 
     new_points.append([r, phi])
 
-print (new_points)
 pints = []
 
 for n, p in enumerate(new_points):
@@ -93,29 +106,48 @@ for n, p in enumerate(new_points):
         starting_angle = new_points[n-1][1]
         ending_angle = new_points[n][1]
         if ending_angle > starting_angle:
-            angle = ending_angle - starting_angle
+            theta = ending_angle - starting_angle
         else:
-            angle = ((2*math.pi)-starting_angle)+ending_angle
+            theta = ((2*math.pi)-starting_angle)+ending_angle
             
-        if angle > math.pi:
+        if theta > math.pi:
             raise Exception("wrong shape, the axis of rotation must be included into the shape")
         #print(angle)
-        if angle > line_sampling:
-            segments = int(math.floor(math.fabs(angle/line_sampling)))
+        if theta > line_sampling:
+            segments = int(math.floor(math.fabs(theta/line_sampling)))
             #print(segments)
+            try:
+                radial_line_angle = normalize_angle(math.atan((new_points[n-1][0]*math.cos(new_points[n-1][1]) - new_points[n][0]*math.cos(new_points[n][1]))/(new_points[n][0]*math.sin(new_points[n][1]) - new_points[n-1][0]*math.sin(new_points[n-1][1]))))
+            except:
+                if new_points[n][0]*math.sin(new_points[n][1])>0:
+                    radial_line_angle = math.pi/2
+                else:
+                    radial_line_angle = math.pi*3/2
+                    
+            r0 = new_points[n][0] * math.cos(normalize_angle(new_points[n][1]-radial_line_angle))
+            
             for i in range(1, segments):
-                new_phi = starting_angle + i *line_sampling
-                if new_phi > 2*math.pi:
-                    new_phi = new_phi - 2*math.pi 
                 
-                new_r = new_points[n][0] *(1/math.cos(new_phi))
+                new_phi = normalize_angle(starting_angle + i * line_sampling)
+                new_r = r0 * (1/math.cos(new_phi - radial_line_angle))
                 pints.append([new_r, new_phi])
         pints.append(p)
+    else:
+        pints.append(p)
         
-        
-print(new_points)
-print("\n")          
-print(pints)             
+#print(new_points)
+#print("\n")
+#print(pints)
+
+with open("new gcode.nc", "w") as f:
+    for n, radial_point in enumerate(pints):
+        if n > 0:
+            diameter = round(2*radial_point[0],3)
+            feedrate = round((math.fabs(radial_point[0]- pints[n-1][0]) * 2 * math.pi)/(normalize_angle(radial_point[1]-pints[n-1][1])),3)
+            f.write(f"G32 X{diameter} F{feedrate}\n")
+        else:
+            diameter = round(2*radial_point[0],3)
+            f.write(f"G00 X{diameter}\n")
                            
 #with open("new gcode.nc", "w") as f:
 #    for n in new_points:
