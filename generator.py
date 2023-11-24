@@ -47,6 +47,8 @@ def parse_gcode_form_file(file_name):
                     if word[0] == "Y":
                         y = float(word[1:])
                 point = [x, y]
+            if point != [0,0]:
+                points.append(point)
             elif words[0] == "G02" or words[0] == "G03":
                 current_position = [float(x),float(y)]
                 end_position = [0,0]
@@ -60,6 +62,9 @@ def parse_gcode_form_file(file_name):
                         center[0] = float(word[1:])
                     if word[0] == "J":
                         center[1] = float(word[1:])
+                        
+                x = end_position[0]
+                y = end_position[1]
 
                 radius_sq_c = ((current_position[0] - center[0])**2 + (current_position[1] - center[1])**2)
                 radius_sq_e = ((end_position[0] - center[0])**2 + (end_position[1] - center[1])**2)
@@ -69,37 +74,54 @@ def parse_gcode_form_file(file_name):
                     radius = (math.sqrt(radius_sq_c))
                 else:
                     raise Exception("wrong radius")
-                if end_position[0] != 0:
-                    alpha = math.atan(end_position[1]/end_position[0])
-                else:
-                    if end_position[1] > 0:
-                        alpha = math.pi/2
-                    else:
-                        alpha = 3/2 *math.pi
-                if current_position[0] != 0:
-                    beta = math.atan(current_position[1]/current_position[0])
+                
+                alpha = math.atan2(end_position[1]-center[1],end_position[0]-center[0])
+                beta = math.atan2(current_position[1]-center[1],current_position[0]-center[0])
+                
+                if words[0] == "G03":
+                    angular_travel = normalize_angle(alpha - beta)
                 else: 
-                    if current_position[1] > 0:
-                            beta = math.pi/2
-                    else:
-                        beta = 3/2 *math.pi
-                        
-                angular_travel = (alpha - beta)
+                    angular_travel = normalize_angle(beta - alpha)                
 
                 segments = math.floor((math.fabs((0.5)*angular_travel*radius))/(math.sqrt(arc_tolerance*(2*radius*arc_tolerance))))
-
+                g2_points =[]
                 theta_per_segment = angular_travel/segments
-                point = [0,0]
                 for i in range(1,segments):
-                    x_p = float(center[0] + (radius*(math.cos(i*theta_per_segment))))
-                    y_p = float(center[1] + (radius*(math.sin(i*theta_per_segment))))
-                    point = [x_p, y_p]
-                    points.append(point)
-
+                    new_center = [0,0]
+                    
+                    new_start = [current_position[0] - center[0], current_position[1] - center[1]]
+                    new_end = [end_position[0] - center[0], end_position[1] - center[1]]
+                    if words[0] == "G03":
+                        g2_points =[]
+                        new_x = new_start[0]*math.cos(i*theta_per_segment) - new_start[1]*math.sin(i*theta_per_segment)
+                        new_y = new_start[0]*math.sin(i*theta_per_segment) + new_start[1]*math.cos(i*theta_per_segment)
+                        
+                        x_p = new_x + center[0]
+                        y_p = new_y + center[1]
+                        
+                        point = [x_p, y_p]
+                        points.append(point)
+                    else:
+                        new_x = (new_end[0]*math.cos(i*theta_per_segment) - new_end[1]*math.sin(i*theta_per_segment))
+                        new_y = (new_end[0]*math.sin(i*theta_per_segment) + new_end[1]*math.cos(i*theta_per_segment))
+                        
+                        x_p = new_x + center[0]
+                        y_p = new_y + center[1]
+                        
+                        g2_points.append([x_p, y_p])
+                        
+                    #x_p = new_x + center[0]
+                    #y_p = new_y + center[1]
+                    #
+                    #point = [x_p, y_p]
+                    #points.append(point)
+                    
+                if g2_points != []:
+                    for i in range(len(g2_points)):
+                        points.append(g2_points[len(g2_points)-i-1])
                 points.append([end_position[0],end_position[1]])
 
-            if point != [0,0]:
-                points.append(point)
+            
     return points
 
 def change_to_polar(cartesian_points):
@@ -196,7 +218,7 @@ class window():
 def main():
     #w = window()
     #w.setup()
-    output_gcode(split_lines(change_to_polar(parse_gcode_form_file("heart.nc"))))
+    output_gcode(split_lines(change_to_polar(parse_gcode_form_file("arcs_example.nc"))))
     
 if __name__ == "__main__":
     main()
