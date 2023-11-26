@@ -1,6 +1,11 @@
 import math
 import tkinter as tk
+import os
+import json
+import functools
 from tkinter.filedialog import askopenfile
+from tkinter.simpledialog import askfloat
+import tkinter.messagebox as message
 
 arc_tolerance = (0.1)
 line_sampling = (0.017) #0.017 - 1 deg
@@ -9,7 +14,7 @@ def sgn (i):
     return (i>0)*2 - 1 if i != 0 else 0
 
 def normalize_angle(angle):
-    angle = round(angle,5)
+    angle = round(angle,7)
     if angle < 0:
         while True:
             angle = angle + 2*math.pi
@@ -120,7 +125,6 @@ def parse_gcode_form_file(file_name):
                     for i in range(len(g2_points)):
                         points.append(g2_points[len(g2_points)-i-1])
                 points.append([end_position[0],end_position[1]])
-
             
     return points
 
@@ -173,52 +177,174 @@ def split_lines(polar_points):
             pints.append(p)
     return pints
 
-def output_gcode(polar_splitted_points):
-    with open("new gcode.nc", "w") as f:
+def output_gcode(polar_splitted_points, passes = 1, pitch = 0, use_variables=False):
+    if os.path.exists("new gcode.nc"):
+        os.remove("new gcode.nc")
+    with open("new gcode.nc", "a") as f:
+        depth = 0.1
         f.write("G90 G54 G18 G21; \nT101 M17; \nG99 F0.2; \nG97 M03 S40;\n\n")
-        for n, radial_point in enumerate(polar_splitted_points):
-            if n > 0:
-                diameter = round(2*radial_point[0],3)
-                feedrate = round((math.fabs(radial_point[0]- polar_splitted_points[n-1][0]) * 2 * math.pi)/(normalize_angle(radial_point[1]-polar_splitted_points[n-1][1])),3)
-                f.write(f"G32 X{diameter} F{feedrate};\n")
-            else:
-                diameter = round(2*radial_point[0],3)
-                f.write(f"G00 X{diameter};\n")
-                
+        #if use_variables:
+        for i in range(passes+2):
+            for n, radial_point in enumerate(polar_splitted_points):
+                if n == 0 and i == 0:
+                    diameter = round(2*radial_point[0],3)
+                    f.write(f"G00 X{diameter} Z{depth};\n")
+                elif n == len(polar_splitted_points)-1 and i < passes+1:
+                    diameter = round(2*radial_point[0],3)
+                    depth = round(depth-pitch, 3)
+                    feedrate = round((math.fabs(math.sqrt((radial_point[0]- polar_splitted_points[n-1][0])**2 + pitch**2)) * 2 * math.pi)/(normalize_angle(radial_point[1]-polar_splitted_points[n-1][1])),3)
+                    f.write(f"G32 X{diameter} Z{depth} F{feedrate};\n")
+                elif n == 0 and i > 0:
+                    diameter = round(2*radial_point[0],3)
+                    feedrate = round((math.fabs(radial_point[0]- polar_splitted_points[n-2][0]) * 2 * math.pi)/(normalize_angle(radial_point[1]-polar_splitted_points[n-2][1])),3)
+                    f.write(f"G32 X{diameter} F{feedrate};\n")
+                else:
+                    diameter = round(2*radial_point[0],3)
+                    s = math.fabs(radial_point[0]- polar_splitted_points[n-1][0])
+                    feedrate = round((math.fabs(radial_point[0]- polar_splitted_points[n-1][0]) * 2 * math.pi)/(normalize_angle(radial_point[1]-polar_splitted_points[n-1][1])),3)
+                    f.write(f"G32 X{diameter} F{feedrate};\n")
+        #else:
+        #    first_line = False
+        #    for n, radial_point in enumerate(polar_splitted_points): 
+        #        if n == 0 and first_line == False:
+        #            diameter = round(2*radial_point[0],3)
+        #            f.write("#501=0")
+        #            f.write(f"G00 X{diameter} Z{depth};\n")
+        #            first_line = True
+        #            f.write("N10")
+        #        elif n == len(polar_splitted_points)-1:
+        #            diameter = round(2*radial_point[0],3)
+        #            depth = round(depth-pitch, 3)
+        #            feedrate = round((math.fabs(math.sqrt((radial_point[0]- polar_splitted_points[n-1][0])**2 + pitch**2)) * 2 * math.pi)/(normalize_angle(radial_point[1]-polar_splitted_points[n-1][1])),3)
+        #            f.write(f"G32 X{diameter} Z{depth} F{feedrate};\n")
+        #        elif n == len(polar_splitted_points) :
+        #            diameter = round(2*radial_point[0],3)
+        #            feedrate = round((math.fabs(radial_point[0]- polar_splitted_points[n-2][0]) * 2 * math.pi)/(normalize_angle(radial_point[1]-polar_splitted_points[n-2][1])),3)
+        #            f.write(f"G32 X{diameter} F{feedrate};\n")
+        #            f.write(f"#501=#501 + {depth}")
+        #            f.write("GOTO10")
+        #        else:
+        #            diameter = round(2*radial_point[0],3)
+        #            s = math.fabs(radial_point[0]- polar_splitted_points[n-1][0])
+        #            feedrate = round((math.fabs(radial_point[0]- polar_splitted_points[n-1][0]) * 2 * math.pi)/(normalize_angle(radial_point[1]-polar_splitted_points[n-1][1])),3)
+        #            f.write(f"G32 X{diameter} F{feedrate};\n")
+        #            
         f.write("\nG00 X100;\nG28;\nM05;\nM30;")    
-
+        
 class window():
     filename = ""
+    settings = {
+        'setting_arc' : 0.0,
+        'setting_line' : 0.0
+    }
+    pitch = 0
+    passes = 1   
     
     def file(self): 
-        self.filename = askopenfile()
+        try:
+            self.filename = askopenfile(filetypes=[('NC file', '*.nc'), ('G-Code files', '*.gcode')])
+            self.filelabel.config(text=self.filename.name)
+            self.input_file.delete("1.0", "end")
+            self.input_file.insert(tk.END, self.filename.read())
+        except:
+            message.showerror("No file", "No file selected")
+        
+    def settings_load(self):
+        try:
+            with open('settings.json', mode='r') as f:
+                content = f.read()
+                self.settings = json.loads(content)
+                
+            global arc_tolerance 
+            global line_sampling
+            arc_tolerance = self.settings['setting_arc']
+            line_sampling = (self.settings['setting_line'] * math.pi)/180
+            
+        except:
+            message.showerror("No file", "Cannot find settings.json")
+        
+    def settings_save(self):
+        if os.path.exists("settings.json"):
+            os.remove("settings.json")
+        with open('settings.json', mode="w") as f:
+            f.write(json.dumps(self.settings))
+            
+    def change_setting(self, setting, message, unit):
+        self.settings_load()
+        self.settings[setting] = askfloat(f"Set {message}", f"Change {message} [{unit}]")
+        self.settings_save()
         
     def compile(self):
-        output_gcode(split_lines(change_to_polar(parse_gcode_form_file(self.filename))))
-    
+        success = False
+        self.settings_load()
+        if self.settings['setting_arc'] > 0.0 and self.settings['setting_line'] > 0:
+            try:
+                output_gcode(split_lines(change_to_polar(parse_gcode_form_file(self.filename.name))), int(self.passes.get()), float(self.pitch.get()))
+                message.showinfo("Compiling complete", "Compiling complete")
+            except:
+                output_gcode(split_lines(change_to_polar(parse_gcode_form_file(self.filename.name))), 1, 0)
+                message.showinfo("Compiling complete", "Compiling complete")
+                success = True
+            finally:
+                if success == False:
+                    message.showerror("Error")
+        else:
+            message.showerror('Wrong settings', "Wrong settings")
+
     def setup(self):
         window = tk.Tk()
         window.title("Haas non-circular turning compiler")
         icon = tk.PhotoImage(file="icon.png")
-        window.iconphoto(True, icon)
-        window.geometry("600x600")
-        B = tk.Button(window, text = "Load File", command= self.file)
-        B.place(x=10, y=10)
-        setting_arc = tk.Text(window, height=1, width=10).place(x=100, y=50)
-        first_label = tk.Label(window, text="Arc tolerance").place(x=10, y=50)
-        setting_line = tk.Text(window, height=1, width=10).place(x=100, y=80)
-        second_label = tk.Label(window, text="Line tolerance").place(x=10, y=80)
+        window.iconphoto(False, icon)
+        window.geometry("800x600")
         
-        file = tk.Label(window, text=self.filename,).place(x=50, y=10)   
-        ready = tk.Button(window, text="Compile", command= self.compile).place(x=10, y=150)
+        menubar = tk.Menu(window, tearoff=0)
+        window.config(menu=menubar)
+        
+        file_menu = tk.Menu(menubar,tearoff=0)
 
+        file_menu.add_command(label='Open...', command=self.file)
+        file_menu.add_command(label='Close', command=window.destroy)
+        
+        settings_menu = tk.Menu(window, tearoff=0)
+        
+        settings_menu.add_cascade(label='Arc tolerance', command=functools.partial(self.change_setting,'setting_arc', 'Arc Tolerance', 'mm'))
+        settings_menu.add_cascade(label='Line tolerance', command=functools.partial(self.change_setting,'setting_line', 'Line Sampling', 'deg'))
+        
+        
+        help_menu = tk.Menu(window, tearoff=0)
+        help_menu.add_command(label='Instructions')
+        help_menu.add_command(label='About')
+        
+        menubar.add_cascade(label="File", menu=file_menu)
+        menubar.add_cascade(label='Settings', menu=settings_menu)
+        menubar.add_cascade(label='Help', menu=help_menu)
+        
+        
+        B = tk.Button(window, text = "Load File", command= self.file).place(x=10, y=10)
+        tk.Label(window, text='Pitch [mm]').place(x=10, y=50)
+        self.pitch = tk.Entry(window)
+        self.pitch.place(x=80, y=50)
+        tk.Label(window, text='Passes').place(x=10, y=80)
+        self.passes = tk.Entry(window)
+        self.passes.place(x=80, y=80)
+        
+        #self.haas_variables = tk.Checkbutton(window, text='Use haas variables')
+        #self.haas_variables.place(x=10, y=120)
+        
+        self.input_file = tk.Text(window, height=30, width=25)
+        self.filelabel = tk.Label(window)
+        self.filelabel.place(x=80, y=10)   
+        ready = tk.Button(window, text="Compile", command= self.compile).place(x=10, y=200)   
+
+        self.input_file.place(x=250, y=50)
+        
         window.mainloop()
 
-
 def main():
-    #w = window()
-    #w.setup()
-    output_gcode(split_lines(change_to_polar(parse_gcode_form_file("arcs_example.nc"))))
+    w = window()
+    w.setup()
+    #output_gcode(split_lines(change_to_polar(parse_gcode_form_file("arcs_example.nc"))), 10 , 0.1)
     
 if __name__ == "__main__":
     main()
