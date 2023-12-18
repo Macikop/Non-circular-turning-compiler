@@ -7,6 +7,7 @@ from tkinter.filedialog import askopenfile
 from tkinter.simpledialog import askfloat
 import tkinter.messagebox as message
 from tkinter.filedialog import asksaveasfile
+import sys
 
 arc_tolerance = 0.1
 line_sampling = 0.017  # 0.017 - 1 deg
@@ -14,6 +15,22 @@ line_sampling = 0.017  # 0.017 - 1 deg
 
 def sgn(i):
     return (i > 0) * 2 - 1 if i != 0 else 0
+
+
+def calculate_phi(x, y):
+    angle = 0.0
+    if x > 0 and y > 0:
+        angle = math.atan(y / x)
+    elif x > 0 and y < 0:
+        angle = math.atan(y / x) + 2 * math.pi
+    elif x < 0:
+        angle = math.atan(y / x) + math.pi
+    elif x == 0 and y > 0:
+        angle = math.pi / 2
+    elif x == 0 and y < 0:
+        angle = (3 * math.pi) / 2
+
+    return round(angle, 7)
 
 
 def normalize_angle(angle):
@@ -161,7 +178,8 @@ def change_to_polar(cartesian_points):
         x = float(punkt[0])
         y = float(punkt[1])
         r = math.sqrt((x * x) + (y * y))
-        phi = normalize_angle(math.acos(x / r) * sgn(y))
+        # phi = normalize_angle(math.acos(x / r) * sgn(y))
+        phi = calculate_phi(x, y)
 
         new_points.append([r, phi])
     return new_points
@@ -177,8 +195,7 @@ def split_lines(polar_points):
             if ending_angle > starting_angle:
                 theta = ending_angle - starting_angle
             else:
-                theta = ((2 * math.pi) - starting_angle) + ending_angle
-
+                theta = normalize_angle(ending_angle - starting_angle)
             if theta > math.pi:
                 raise Exception(
                     "wrong shape, the axis of rotation must be included into the shape"
@@ -222,41 +239,22 @@ def split_lines(polar_points):
     return pints
 
 
-def output_gcode(polar_splitted_points, passes, pitch, Zstart, file):
+def output_gcode(polar_splitted_points, passes, pitch, Zstart, outside_diameter, file):
     output_string = ""
     depth = Zstart - pitch
-    output_string +=("G90 G54 G18 G21; \nT101 M17; \nG99 F0.2; \nG97 M03 S40;\n\n")
+    output_string += f"G90 G54 G18 G21;\nT101 M17;\nG99 F0.2;\nG00 X{outside_diameter} Z{Zstart};\nG97 M03 S40;\n\n"
     # if use_variables:
-    feedrate=0
+    feedrate = 0
     for i in range(passes):
         for n, radial_point in enumerate(polar_splitted_points):
             if n == 0 and i == 0:
                 diameter = round(2 * radial_point[0], 3)
-                output_string +=(f"G00 X{diameter} Z{depth};\n")
-            elif n == len(polar_splitted_points) - 1 and i < passes + 1:
-                diameter = round(2 * radial_point[0], 3)
-                depth = round(depth - pitch, 3)
-                feedrate = round(
-                    (
-                        math.fabs(
-                            math.sqrt(
-                                (radial_point[0] - polar_splitted_points[n - 1][0])
-                                ** 2
-                                + pitch**2
-                            )
-                        )
-                        * 2
-                        * math.pi
-                    )
-                    / (
-                        normalize_angle(
-                            radial_point[1] - polar_splitted_points[n - 1][1]
-                        )
-                    ),
-                    3,
-                )
-                output_string +=(f"G32 X{diameter} Z{depth} F{feedrate};\n")
-            elif n == 0 and i > 0:
+                output_string += f"G00 X{diameter} Z{depth};\n"
+            elif (
+                (n == 0 and i > 0)
+                or n == len(polar_splitted_points) - 1
+                and i == passes - 1
+            ):
                 diameter = round(2 * radial_point[0], 3)
                 feedrate = round(
                     (
@@ -271,7 +269,29 @@ def output_gcode(polar_splitted_points, passes, pitch, Zstart, file):
                     ),
                     3,
                 )
-                output_string +=(f"G32 X{diameter} F{feedrate};\n")
+                output_string += f"G32 X{diameter} F{feedrate};\n"
+            elif n == len(polar_splitted_points) - 1 and i < passes + 1:
+                diameter = round(2 * radial_point[0], 3)
+                depth = round(depth - pitch, 3)
+                feedrate = round(
+                    (
+                        math.fabs(
+                            math.sqrt(
+                                (radial_point[0] - polar_splitted_points[n - 1][0]) ** 2
+                                + pitch**2
+                            )
+                        )
+                        * 2
+                        * math.pi
+                    )
+                    / (
+                        normalize_angle(
+                            radial_point[1] - polar_splitted_points[n - 1][1]
+                        )
+                    ),
+                    3,
+                )
+                output_string += f"G32 X{diameter} Z{depth} F{feedrate};\n"
             else:
                 diameter = round(2 * radial_point[0], 3)
                 s = math.fabs(radial_point[0] - polar_splitted_points[n - 1][0])
@@ -288,9 +308,7 @@ def output_gcode(polar_splitted_points, passes, pitch, Zstart, file):
                     ),
                     3,
                 )
-                output_string +=(f"G32 X{diameter} F{feedrate};\n")
-            if feedrate > 200:
-                raise Exception("Too high feedrate")
+                output_string += f"G32 X{diameter} F{feedrate};\n"
     # else:
     #    first_line = False
     #    for n, radial_point in enumerate(polar_splitted_points):
@@ -317,10 +335,10 @@ def output_gcode(polar_splitted_points, passes, pitch, Zstart, file):
     #            feedrate = round((math.fabs(radial_point[0]- polar_splitted_points[n-1][0]) * 2 * math.pi)/(normalize_angle(radial_point[1]-polar_splitted_points[n-1][1])),3)
     #            output_string +=(f"G32 X{diameter} F{feedrate};\n")
     #
-        output_string +=("G28 W0;\n G28 U0;\nM05;\nM30;")
-        
-        file.write(output_string)
-        file.close()
+    output_string += f"G00 X{outside_diameter};\nG28 U0;\nG28 W0;\nM05;\nM30;"
+
+    file.write(output_string)
+    file.close()
 
 
 class Window:
@@ -328,9 +346,13 @@ class Window:
     settings = {"setting_arc": 0.0, "setting_line": 0.0}
     pitch = 0
     passes = 1
-    
+
     def file_destination(self):
-        return asksaveasfile(initialfile = 'Untitled.nc',defaultextension=".nc",filetypes=[("NC file", "*.nc"), ("G-Code files", "*.gcode")])
+        return asksaveasfile(
+            initialfile="Untitled.nc",
+            defaultextension=".nc",
+            filetypes=[("NC file", "*.nc"), ("G-Code files", "*.gcode")],
+        )
 
     def file(self):
         try:
@@ -371,38 +393,43 @@ class Window:
         self.settings_save()
 
     def compile(self):
-        success = False
-        self.settings_load()
-        if self.settings["setting_arc"] > 0.0 and self.settings["setting_line"] > 0:
+        try:
+            self.settings_load()
+            passes = int(self.passes.get())
+            pitch = float(self.pitch.get())
+            starting_point = float(self.startingZ.get())
+            stock_diameter = float(self.returnX.get())
+        except:
+            message.showerror("Wrong input", "Program parameters are missing")
+            return False
+
+        if (
+            self.settings["setting_arc"] > 0.0
+            and self.settings["setting_line"] > 0
+            and passes > 0
+            and pitch > 0
+        ):
             try:
                 output_gcode(
                     split_lines(
                         change_to_polar(parse_gcode_form_file(self.filename.name))
                     ),
-                    int(self.passes.get()),
-                    float(self.pitch.get()),
-                    float(self.startingZ.get()),
+                    passes,
+                    pitch,
+                    starting_point,
+                    stock_diameter,
                     self.file_destination() or open("new_gcode.nc", "w"),
                 )
                 message.showinfo("Compiling complete", "Compiling complete")
-                success = True
-            except:
-                output_gcode(
-                    split_lines(
-                        change_to_polar(parse_gcode_form_file(self.filename.name))
-                    ),
-                    1,
-                    0,
-                    0,
-                    self.file_destination() or open("new_gcode.nc", "w")
-                )
-                message.showinfo("Compiling complete", "Compiling complete")
-                success = True
-            finally:
-                if success == False:
-                    message.showerror("Error")
+                return True
+            except Exception as e:
+                exc_type, exc_obj, exc_tb = sys.exc_info()
+                fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+                message.showerror(message=str(e) + str(fname) + str(exc_tb.tb_lineno))
+                return False
         else:
             message.showerror("Wrong settings", "Wrong settings")
+            return False
 
     def setup(self):
         window = tk.Tk()
@@ -445,14 +472,18 @@ class Window:
         B = tk.Button(window, text="Load File", command=self.file).place(x=10, y=10)
         tk.Label(window, text="Pitch [mm]").place(x=10, y=50)
         self.pitch = tk.Entry(window)
-        self.pitch.place(x=80, y=50)
+        self.pitch.place(x=100, y=50)
         tk.Label(window, text="Passes").place(x=10, y=80)
         self.passes = tk.Entry(window)
-        self.passes.place(x=80, y=80)
-        
-        tk.Label(window, text="Z start [mm]").place(x=10, y=120)    
+        self.passes.place(x=100, y=80)
+
+        tk.Label(window, text="Z start [mm]").place(x=10, y=120)
         self.startingZ = tk.Entry(window)
-        self.startingZ.place(x=80, y=120)
+        self.startingZ.place(x=100, y=120)
+
+        tk.Label(window, text="Return X [mm]").place(x=10, y=150)
+        self.returnX = tk.Entry(window)
+        self.returnX.place(x=100, y=150)
 
         # self.haas_variables = tk.Checkbutton(window, text='Use haas variables')
         # self.haas_variables.place(x=10, y=120)
