@@ -242,6 +242,7 @@ def split_lines(polar_points):
 def output_gcode(polar_splitted_points, passes, pitch, Zstart, outside_diameter, file):
     output_string = ""
     depth = Zstart - pitch
+    output_string += f"\n"
     output_string += f"G90 G54 G18 G21;\nT101 M17;\nG99 F0.2;\nG00 X{outside_diameter} Z{Zstart};\nG97 M03 S40;\n\n"
     # if use_variables:
     feedrate = 0
@@ -275,12 +276,7 @@ def output_gcode(polar_splitted_points, passes, pitch, Zstart, outside_diameter,
                 depth = round(depth - pitch, 3)
                 feedrate = round(
                     (
-                        math.fabs(
-                            math.sqrt(
-                                (radial_point[0] - polar_splitted_points[n - 1][0]) ** 2
-                                + pitch**2
-                            )
-                        )
+                        math.fabs(radial_point[0] - polar_splitted_points[n - 2][0])
                         * 2
                         * math.pi
                     )
@@ -291,7 +287,8 @@ def output_gcode(polar_splitted_points, passes, pitch, Zstart, outside_diameter,
                     ),
                     3,
                 )
-                output_string += f"G32 X{diameter} Z{depth} F{feedrate};\n"
+                output_string += f"G32 X{diameter} F{feedrate};\n"
+                output_string += f"G00 X{outside_diameter};\nM05;\nG00 Z{depth};\nM17;\nM03 S40;\n"
             else:
                 diameter = round(2 * radial_point[0], 3)
                 s = math.fabs(radial_point[0] - polar_splitted_points[n - 1][0])
@@ -335,7 +332,7 @@ def output_gcode(polar_splitted_points, passes, pitch, Zstart, outside_diameter,
     #            feedrate = round((math.fabs(radial_point[0]- polar_splitted_points[n-1][0]) * 2 * math.pi)/(normalize_angle(radial_point[1]-polar_splitted_points[n-1][1])),3)
     #            output_string +=(f"G32 X{diameter} F{feedrate};\n")
     #
-    output_string += f"G00 X{outside_diameter};\nG28 U0;\nG28 W0;\nM05;\nM30;"
+    output_string += f"G00 X{outside_diameter};\nG28 U0;\nG28 W0;\nM05;\nM30;\n%"
 
     file.write(output_string)
     file.close()
