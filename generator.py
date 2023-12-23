@@ -59,116 +59,208 @@ def parse_gcode_form_file(file_name):
 
     points = []
 
-    x = 0
-    y = 0
+    g_code_settings = {
+        'offset' : 54,
+        'coordinate_system' : 1, # 0 - machine, 1 - absolute (G90), 2 - incremental (G91)
+        'plane' : 0, #0 - G17, 1 - G18, 2 - G19
+        'units_m' : True, # True - mm (G21), False - inch (G20)   
+        'tool_number' : 1,
+        'spindle_speed' : 20,
+        'spindle_state' : 0, #-1 - Left (M04), 0 - Stop (M05), 1 - Right (M03)
+        'coolant' : False,
+        'program_number' : 'O01000',
+        }
+    
+    active_command = ['', -1, {}]
+    ignore = False
+    current_command = active_command
+    last_i = 0
+    splitted_file = []
+    
+    for i, line in enumerate(file_content):
+        line = line.upper()
+        current_command = active_command
+        line = line.strip()
+        if line != '':
+            if line[0][0] == 'N':
+                line = line[1:]
+                
+            line = line.split()
+            for n, word in enumerate(line):
+                word = word.strip('; ')
+                command_letter = ''
+                command_number = ''
+                if not(word in ['', '%']):
+                    for char in word:
+                        if char == '(':
+                            ignore = True
+                        if char == ')':
+                            ignore = False
+                        
+                        if ignore == False:
+                            if char in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '-']:
+                                command_number += char
+                            else:
+                                if command_letter == '':
+                                    command_letter = char
+                                else:
+                                    raise Exception('Invalid G code command')
+                                
+                    if command_letter != '' and command_number != '':
+                        command_number = float(command_number)
+                        if command_letter in ['G', 'M', 'T', 'S', 'O']:
+                            current_command = [command_letter, command_number, {}]
+                        elif i > last_i:
+                            if current_command in ['G', 'M', 'T', 'S']:
+                                current_command = [command_letter, command_number, {}]
+                            else:
+                                current_command = [active_command[0], active_command[1], {command_letter : command_number}]
+                        else:
+                            if current_command != ['', -1, {}]:
+                                current_command[2].update({command_letter : command_number})
+                            else:
+                                current_command = [command_letter, command_number, {}]
+                                
+                        if active_command == ['', -1, {}] or active_command != current_command:
+                            if current_command[0] == 'G':
+                                if current_command[1] in [0, 1, 2, 3]:
+                                    active_command = [current_command[0], current_command[1], {}]
+                                    
+                    if command_letter != '' and command_number != '':
+                        if i == 1 and last_i == 0:
+                            splitted_file.append(current_command) 
+                        
+                        if current_command != ['', -1, {}] and splitted_file[-1] != current_command: 
+                            splitted_file.append(current_command) 
+                        last_i = i
+                        
+    for n in splitted_file:
+        print(n)
+    
+    starting_point = [0.0,0.0]
+    points = []
+    cutting_started = False
+    
 
-    for line in file_content:
-        point = [0, 0]
-        words = line.split()
-        if words != []:
-            if words[0] == "G00" or words[0] == "G01":
-                for word in words:
-                    if word[0] == "X":
-                        x = float(word[1:])
-                    if word[0] == "Y":
-                        y = float(word[1:])
-                point = [x, y]
-            if point != [0, 0]:
+    for command in splitted_file:
+        if command[0] == 'G' and command[1] == 0.0 and cutting_started == False:
+            arguments = command[2].keys()
+            if 'X' in arguments:
+                starting_point[0] = command[2]['X']
+            if 'Y' in arguments:
+                starting_point[1] = command[2]['Y']
+                
+        elif command[0] == 'G' and command[1] == 1.0:
+            if points == [] and starting_point != [0.0, 0.0]:
+                points.append(starting_point)
+            
+            cutting_started = True
+            point = [points[-1][0], points[-1][1]]
+            arguments = command[2].keys()
+            if 'X' in arguments:
+                point[0] = command[2]['X']
+            if 'Y' in arguments:
+                point[1] = command[2]['Y']
+            if 'X' in arguments or 'Y' in arguments:
                 points.append(point)
-            elif words[0] == "G02" or words[0] == "G03":
-                current_position = [float(x), float(y)]
-                end_position = [0, 0]
-                center = [0, 0]
-                for word in words:
-                    if word[0] == "X":
-                        end_position[0] = float(word[1:])
-                    if word[0] == "Y":
-                        end_position[1] = float(word[1:])
-                    if word[0] == "I":
-                        center[0] = float(word[1:])
-                    if word[0] == "J":
-                        center[1] = float(word[1:])
+                
+        elif command[0] == 'G' and (command[1] in [2.0, 3.0]):
+            if points == [] and starting_point != [0.0, 0.0]:
+                points.append(starting_point)
 
-                x = end_position[0]
-                y = end_position[1]
+            cutting_started = True
+            
+            current_position = [points[-1][0], points[-1][1]]
+            end_position = [points[-1][0], points[-1][1]]
+            center = [0.0, 0.0]
+            
+            arguments = command[2].keys()
+            if 'X' in arguments:
+                end_position[0] = command[2]['X']
+            
+            if 'Y' in arguments:
+                end_position[1] = command[2]['Y']
+            
+            if 'I' in arguments:
+                center[0] = command[2]['I']
+            else:
+                raise Exception("Missing arguments")
+            
+            if 'J' in arguments:
+                center[1] = command[2]['J']
+            else:
+                raise Exception("Missing arguments")
 
-                radius_sq_c = (current_position[0] - center[0]) ** 2 + (
-                    current_position[1] - center[1]
-                ) ** 2
-                radius_sq_e = (end_position[0] - center[0]) ** 2 + (
-                    end_position[1] - center[1]
-                ) ** 2
-                radius = 0
+            radius_sq_c = (current_position[0] - center[0]) ** 2 + (
+                current_position[1] - center[1]
+            ) ** 2
+            radius_sq_e = (end_position[0] - center[0]) ** 2 + (
+                end_position[1] - center[1]
+            ) ** 2
+            
+            if radius_sq_c == radius_sq_e:
                 radius = math.sqrt(radius_sq_c)
-                if radius_sq_c == radius_sq_e:
-                    radius = math.sqrt(radius_sq_c)
+            else:
+                raise Exception("wrong radius")
+
+            alpha = math.atan2(
+                end_position[1] - center[1], end_position[0] - center[0]
+            )
+            beta = math.atan2(
+                current_position[1] - center[1], current_position[0] - center[0]
+            )
+
+            if command[1] == 3.0:
+                angular_travel = normalize_angle(alpha - beta)
+            else:
+                angular_travel = normalize_angle(beta - alpha)
+
+            segments = math.floor(
+                (math.fabs((0.5) * angular_travel * radius))
+                / (math.sqrt(arc_tolerance * (2 * radius * arc_tolerance)))
+            )
+            g2_points = []
+            theta_per_segment = angular_travel / segments
+            for i in range(1, segments):
+                new_center = [0, 0]
+
+                new_start = [
+                    current_position[0] - center[0],
+                    current_position[1] - center[1],
+                ]
+                new_end = [end_position[0] - center[0], end_position[1] - center[1]]
+                if command[1] == 3.0:
+                    g2_points = []
+                    new_x = new_start[0] * math.cos(
+                        i * theta_per_segment
+                    ) - new_start[1] * math.sin(i * theta_per_segment)
+                    new_y = new_start[0] * math.sin(
+                        i * theta_per_segment
+                    ) + new_start[1] * math.cos(i * theta_per_segment)
+
+                    x_p = new_x + center[0]
+                    y_p = new_y + center[1]
+
+                    point = [x_p, y_p]
+                    points.append(point)
                 else:
-                    raise Exception("wrong radius")
+                    new_x = new_end[0] * math.cos(i * theta_per_segment) - new_end[
+                        1
+                    ] * math.sin(i * theta_per_segment)
+                    new_y = new_end[0] * math.sin(i * theta_per_segment) + new_end[
+                        1
+                    ] * math.cos(i * theta_per_segment)
 
-                alpha = math.atan2(
-                    end_position[1] - center[1], end_position[0] - center[0]
-                )
-                beta = math.atan2(
-                    current_position[1] - center[1], current_position[0] - center[0]
-                )
+                    x_p = new_x + center[0]
+                    y_p = new_y + center[1]
 
-                if words[0] == "G03":
-                    angular_travel = normalize_angle(alpha - beta)
-                else:
-                    angular_travel = normalize_angle(beta - alpha)
+                    g2_points.append([x_p, y_p])
 
-                segments = math.floor(
-                    (math.fabs((0.5) * angular_travel * radius))
-                    / (math.sqrt(arc_tolerance * (2 * radius * arc_tolerance)))
-                )
-                g2_points = []
-                theta_per_segment = angular_travel / segments
-                for i in range(1, segments):
-                    new_center = [0, 0]
-
-                    new_start = [
-                        current_position[0] - center[0],
-                        current_position[1] - center[1],
-                    ]
-                    new_end = [end_position[0] - center[0], end_position[1] - center[1]]
-                    if words[0] == "G03":
-                        g2_points = []
-                        new_x = new_start[0] * math.cos(
-                            i * theta_per_segment
-                        ) - new_start[1] * math.sin(i * theta_per_segment)
-                        new_y = new_start[0] * math.sin(
-                            i * theta_per_segment
-                        ) + new_start[1] * math.cos(i * theta_per_segment)
-
-                        x_p = new_x + center[0]
-                        y_p = new_y + center[1]
-
-                        point = [x_p, y_p]
-                        points.append(point)
-                    else:
-                        new_x = new_end[0] * math.cos(i * theta_per_segment) - new_end[
-                            1
-                        ] * math.sin(i * theta_per_segment)
-                        new_y = new_end[0] * math.sin(i * theta_per_segment) + new_end[
-                            1
-                        ] * math.cos(i * theta_per_segment)
-
-                        x_p = new_x + center[0]
-                        y_p = new_y + center[1]
-
-                        g2_points.append([x_p, y_p])
-
-                    # x_p = new_x + center[0]
-                    # y_p = new_y + center[1]
-                    #
-                    # point = [x_p, y_p]
-                    # points.append(point)
-
-                if g2_points != []:
-                    for i in range(len(g2_points)):
-                        points.append(g2_points[len(g2_points) - i - 1])
-                points.append([end_position[0], end_position[1]])
-
+            if g2_points != []:
+                for i in range(len(g2_points)):
+                    points.append(g2_points[len(g2_points) - i - 1])
+            points.append([end_position[0], end_position[1]])
+    
     return points
 
 
@@ -500,8 +592,7 @@ class Window:
 def main():
     w = Window()
     w.setup()
-    # output_gcode(split_lines(change_to_polar(parse_gcode_form_file("arcs_example.nc"))), 10 , 0.1)
-
+    output_gcode(split_lines(change_to_polar(parse_gcode_form_file("arcs_example.nc"))), 10 , 0.1)
 
 if __name__ == "__main__":
     main()
